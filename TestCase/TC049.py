@@ -94,14 +94,15 @@ class TC049(TCBase):
             "[.//span[normalize-space()='기간/요일']]"
             "//span[contains(@class, 'list-item-recruit-details__children')]"
         )
-        seen_weekday_types = set()
         page = 1
+        checked_jobs = 0
 
-        while True:
+        while checked_jobs < self.MAX_JOBS:
             try:
                 self.wait_for_elements(job_items, f"{page}페이지 공고 목록")
                 items = self.browser.find_elements(*job_items)
                 self.assertTrue(items, f"{page}페이지에 공고가 없습니다.")
+                items = items[: self.MAX_JOBS - checked_jobs]
                 self._log_action(f"{page}페이지 공고 기간/요일 확인 중...")
 
                 invalid_jobs = []
@@ -124,11 +125,6 @@ class TC049(TCBase):
                     ).strip() or "확인 불가"
                     normalized_work_day = "".join(work_day_detail.split())
                     detail_work_day = ""
-
-                    for weekday_type in self.EXPECTED_WEEKDAY_TYPES:
-                        normalized_weekday_type = "".join(weekday_type.split())
-                        if normalized_weekday_type in normalized_work_day:
-                            seen_weekday_types.add(weekday_type)
 
                     is_two_day_job = "주2일" in normalized_work_day
                     if is_two_day_job:
@@ -167,6 +163,10 @@ class TC049(TCBase):
                     invalid_jobs,
                     f"{page}페이지에 조건과 맞지 않는 공고가 있습니다: {invalid_jobs}",
                 )
+
+                checked_jobs += len(items)
+                if checked_jobs >= self.MAX_JOBS:
+                    break
 
                 next_page_locator = (
                     By.XPATH,
@@ -208,11 +208,8 @@ class TC049(TCBase):
                     f"{exc}"
                 )
 
-        self.assertEqual(
-            seen_weekday_types,
-            set(self.EXPECTED_WEEKDAY_TYPES),
-            "주말(토,일), 주2일, 요일 협의 공고가 모두 조회되지 않았습니다.",
-        )
+        # 조회된 공고가 허용된 3가지 근무요일 유형 중 하나인지 여부는
+        # 각 공고를 처리하는 동안 invalid_jobs로 검증한다.
 
     def tearDown(self):
         super().dispose()

@@ -85,15 +85,21 @@ class TC017(TCBase):
             "//ul[contains(@class, 'SimpleRecruitList')]//li",
         )
         page = 1
+        checked_jobs = 0
 
-        while True:
+        while checked_jobs < self.MAX_JOBS:
             try:
                 self.wait.until(
                     lambda driver: driver.find_elements(*job_locations)
                 )
                 locations = self.read_job_locations(job_locations)
+                locations = locations[: self.MAX_JOBS - checked_jobs]
+                checked_jobs += len(locations)
                 self._log_action(f"{page}페이지 공고 확인 중...")
                 self.assertTrue(locations, f"{page}페이지에 공고가 없습니다.")
+
+                if checked_jobs >= self.MAX_JOBS:
+                    break
 
                 invalid_locations = [
                     location

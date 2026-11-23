@@ -8,8 +8,149 @@ class TC003(TCBase):
     def setUp(self):
         super().init()
 
+    @staticmethod
+    def _visible_names(elements, exclude_all=False):
+        """지역 버튼에서 공백 및 전체 항목을 제외한 이름을 추출한다."""
+        names = []
+        for element in elements:
+            name = " ".join(element.text.split())
+            if not name:
+                continue
+            if exclude_all and name.endswith("전체"):
+                continue
+            names.append(name)
+        return names
+
+    def _verify_region_jobs(self, region, job_locations):
+        """선택한 최하위 지역의 공고를 최대 MAX_JOBS건까지 검증한다."""
+        _, district, town = region
+        expected_location = f"{district} {town}"
+        job_region_locator = (
+            ".//div[contains(@class, 'list-item-recruit__contents--keyword-area')]"
+        )
+        job_workplace_locator = (
+            ".//div[contains(@class, 'list-item-recruit-details__item')]"
+            "[.//span[normalize-space()='근무지']]"
+            "//span[contains(@class, 'list-item-recruit-details__children')]"
+        )
+        job_category_locator = (
+            ".//div[contains(@class, 'list-item-recruit-details__item')]"
+            "[.//span[normalize-space()='업직종']]"
+            "//span[contains(@class, 'list-item-recruit-details__children')]"
+        )
+        page = 1
+        checked_jobs = 0
+
+        while checked_jobs < self.MAX_JOBS:
+            try:
+                self.wait_for_elements(
+                    job_locations,
+                    f"{expected_location} {page}페이지 공고 목록",
+                )
+                items = self.browser.find_elements(*job_locations)
+                self.assertTrue(items, f"{expected_location} {page}페이지에 공고가 없습니다.")
+                remaining_jobs = self.MAX_JOBS - checked_jobs
+                invalid_jobs = []
+                for index, item in enumerate(items[:remaining_jobs], start=1):
+                    title = item.find_element(
+                        By.CSS_SELECTOR,
+                        "a.list-item-recruit__link",
+                    ).text
+                    region_elements = item.find_elements(
+                        By.XPATH,
+                        job_region_locator,
+                    )
+                    workplace_elements = item.find_elements(
+                        By.XPATH,
+                        job_workplace_locator,
+                    )
+                    category_elements = item.find_elements(
+                        By.XPATH,
+                        job_category_locator,
+                    )
+                    region_text = " ".join(
+                        " ".join(element.text.split())
+                        for element in region_elements
+                    ).strip() or "확인 불가"
+                    workplace_text = " ".join(
+                        " ".join(element.text.split())
+                        for element in workplace_elements
+                    ).strip() or "확인 불가"
+                    category_text = " ".join(
+                        " ".join(element.text.split())
+                        for element in category_elements
+                    ).strip() or "확인 불가"
+                    is_allowed = expected_location in region_text
+                    self._log_action(
+                        f"{page}페이지 {index}번 공고 | "
+                        f"공고 지역: {region_text} | 실제 근무지: {workplace_text} | "
+                        f"업직종: {category_text} | "
+                        f"검증: {'통과' if is_allowed else '실패'}"
+                    )
+                    if not is_allowed:
+                        invalid_jobs.append(
+                            f"{title} [공고 지역={region_text}, "
+                            f"실제 근무지={workplace_text}, 업직종={category_text}]"
+                        )
+                    checked_jobs += 1
+
+                if invalid_jobs:
+                    invalid_job_details = "\n".join(
+                        f"- {invalid_job}" for invalid_job in invalid_jobs
+                    )
+                    self.fail(
+                        f"{page}페이지에서 {expected_location} 조건 불일치 공고 "
+                        f"{len(invalid_jobs)}건이 발견되었습니다.\n"
+                        f"조건 불일치 상세:\n{invalid_job_details}"
+                    )
+
+                if checked_jobs >= self.MAX_JOBS:
+                    break
+
+                next_page_locator = (
+                    By.XPATH,
+                    f"//*[@role='navigation']//button["
+                    f"contains(@aria-label, 'goto {page + 1} in')]",
+                )
+                if not self.scroll_to_pagination(next_page_locator):
+                    break
+
+                previous_titles = tuple(
+                    item.find_element(
+                        By.CSS_SELECTOR,
+                        "a.list-item-recruit__link",
+                    ).text
+                    for item in items
+                )
+                self.browser.find_element(*next_page_locator).click()
+
+                def is_page_changed(driver):
+                    try:
+                        current_titles = tuple(
+                            item.find_element(
+                                By.CSS_SELECTOR,
+                                "a.list-item-recruit__link",
+                            ).text
+                            for item in driver.find_elements(*job_locations)
+                        )
+                        return bool(current_titles) and current_titles != previous_titles
+                    except StaleElementReferenceException:
+                        return False
+
+                self.wait.until(is_page_changed)
+                self.wait_for_recruit_list_rendered(
+                    job_locations,
+                    f"{expected_location} {page + 1}페이지 공고 목록",
+                )
+                page += 1
+            except Exception as exc:
+                self.fail(
+                    f"{expected_location} {page}페이지 공고 지역 검증 중 오류가 "
+                    f"발생했습니다: {exc}"
+                )
+
     def test_select_region(self):
-        """제주 서귀포시 강정동을 선택하고 지역 공고가 조회되는지 확인한다."""
+        """전체 항목을 제외한 모든 동·읍·면 지역 공고를 확인한다."""
         super().load()
 
         self.select_if_not_selected(
@@ -20,135 +161,145 @@ class TC003(TCBase):
         self.sleep()
 
         panel = "//div[@role='tabpanel' and @id='panel-0']"
-        # 테스트 절차: 제주 선택
+        province_buttons = (
+            By.XPATH,
+            f"{panel}//span[normalize-space()='시·도']"
+            "/parent::div/following-sibling::ul[1]//li[@role='button']",
+        )
+        district_buttons = (
+            By.XPATH,
+            f"{panel}//div[normalize-space()='시·구·군']"
+            "/following-sibling::ul[1]//li[@role='button']",
+        )
+        town_buttons = (
+            By.XPATH,
+            f"{panel}//div[normalize-space()='동·읍·면']"
+            "/following-sibling::ul[1]//li[@role='button']",
+        )
+        provinces = self._visible_names(
+            self.wait_for_elements(province_buttons, "시·도 목록"),
+        )
+        provinces = [province for province in provinces if province != "전국"]
+        self.assertTrue(provinces, "순회할 시·도 목록이 없습니다.")
+
+        page_size_locator = (By.ID, "select-size")
+        self.click_element(page_size_locator, "공고 목록 노출 개수 선택")
         self.click_element(
-            (
-                By.XPATH,
-                f"{panel}//li[@role='button' and normalize-space(.)='제주']"
-            ),
-            "'제주' 지역",
+            (By.XPATH, "//button[normalize-space()='50개씩']"),
+            "공고 50개씩 보기",
         )
-        self.sleep()
-
-        # 테스트 절차: 서귀포시 선택
-        self.click_element(
-            (
-                By.XPATH,
-                f"{panel}//li[@role='button' and normalize-space(.)='서귀포시']"
-            ),
-            "'서귀포시' 지역",
+        self.wait.until(
+            lambda driver: driver.find_element(*page_size_locator).text.strip()
+            == "50개씩"
         )
-        self.sleep()
 
-        # 테스트 절차: 강정동 선택
-        self.click_element(
-            (
-                By.XPATH,
-                f"{panel}//li[@role='button' and normalize-space(.)='강정동']"
-            ),
-            "'강정동' 지역",
-        )
-        self.sleep()
-
-        # 기대 결과: 지역 탭에 1 표기
-        self.assert_element_text(
-            (By.XPATH, "//label[@role='tab' and @for='tab-0']//em"),
-            "1",
-            "지역 탭 선택 개수",
-        )
-        self.sleep()
-
-        # 기대 결과: 조건 개수 1/5 표기
-        self.assert_element_text(
-            (By.XPATH, f"{panel}//div[contains(@class, 'filter-header__counter')]"),
-            "1/5",
-            "지역 조건 개수",
-        )
-        self.sleep()
-
-        # 기대 결과: 조건 리스트에 강정동 추가
-        self.assert_element_text(
-            (
-                By.XPATH,
-                "//div[contains(@class, 'selector-chips__list')]"
-                "//button[contains(@class, 'selector-chips__chip')]",
-            ),
-            "강정동",
-            "선택 지역 조건",
-        )
-        self.sleep()
-
-        # 공고 리스트에 서귀포시 강정동에 있는 공고들만 조회됨
         job_locations = (
             By.XPATH,
             "//ul[contains(@class, 'SimpleRecruitList')]//li",
         )
-        page = 1
+        self.click_element(
+            (By.XPATH, "//button[normalize-space()='리스트 펼쳐 보기']"),
+            "공고 리스트 그리드뷰 전환",
+        )
+        self.wait_for_recruit_list_rendered(
+            job_locations,
+            "그리드뷰 전환 후 공고 목록",
+        )
 
-        while True:
-            try:
-                # 현재 페이지의 공고 목록을 읽는다.
-                self.wait.until(
-                    lambda driver: driver.find_elements(*job_locations)
+        counter_locator = (
+            By.XPATH,
+            f"{panel}//div[contains(@class, 'filter-header__counter')]",
+        )
+        chip_base = (
+            "//div[contains(@class, 'selector-chips__list')]"
+            "//button[contains(@class, 'selector-chips__chip')]"
+        )
+
+        checked_regions = 0
+        for province in provinces:
+            self.click_element(
+                self.region_button_locator(panel, province),
+                f"'{province}' 시·도",
+            )
+            self.sleep()
+
+            districts = self._visible_names(
+                self.wait_for_elements(
+                    district_buttons,
+                    f"{province} 시·구·군 목록",
+                ),
+                exclude_all=True,
+            )
+            self.assertTrue(
+                districts,
+                f"'{province}'의 시·구·군 목록이 없습니다.",
+            )
+
+            for district in districts:
+                self.click_element(
+                    self.region_button_locator(panel, district),
+                    f"'{province} {district}' 시·구·군",
                 )
-                locations = self.read_job_locations(job_locations)
-                self._log_action(f"{page}페이지 공고 확인 중...")
+                self.sleep()
 
+                towns = self._visible_names(
+                    self.wait_for_elements(
+                        town_buttons,
+                        f"{province} {district} 동·읍·면 목록",
+                    ),
+                    exclude_all=True,
+                )
                 self.assertTrue(
-                    locations,
-                    f"{page}페이지에 공고가 없습니다.",
+                    towns,
+                    f"'{province} {district}'의 동·읍·면 목록이 없습니다.",
                 )
 
-                # 현재 페이지의 모든 공고가 선택한 지역인지 검증한다.
-                invalid_locations = [
-                    location
-                    for location in locations
-                    if "서귀포시 강정동" not in location
-                ]
-                self.assertFalse(
-                    invalid_locations,
-                    f"{page}페이지에 강정동 이외의 공고가 있습니다: "
-                    f"{invalid_locations}",
-                )
+                for town in towns:
+                    region = f"{province} {district} {town}"
+                    town_locator = self.region_button_locator(panel, town)
+                    self.click_element(town_locator, f"'{region}' 동·읍·면")
 
-                # 다음 페이지 버튼을 찾는다.
-                next_page_locator = (
-                    By.XPATH,
-                    f"//*[@role='navigation']//button["
-                    f"contains(@aria-label, 'goto {page + 1} in')]",
-                )
-                next_page = self.scroll_to_pagination(next_page_locator)
+                    self.assert_element_text(
+                        (By.XPATH, "//label[@role='tab' and @for='tab-0']//em"),
+                        "1",
+                        f"{region} 선택 후 지역 탭 선택 개수",
+                    )
+                    self.assert_element_text(
+                        counter_locator,
+                        "1/5",
+                        f"{region} 지역 조건 개수",
+                    )
+                    self.assert_element_text(
+                        (By.XPATH, f"{chip_base}[normalize-space(.)={town!r}]"),
+                        town,
+                        f"조건 리스트의 {region}",
+                    )
+                    self.wait_for_recruit_list_rendered(
+                        job_locations,
+                        f"{region} 조건 적용 후 공고 목록",
+                    )
+                    self._verify_region_jobs(
+                        (province, district, town),
+                        job_locations,
+                    )
 
-                # 마지막 페이지라면 스크롤 후 테스트를 종료한다.
-                if not next_page:
-                    break
+                    self.click_element(town_locator, f"'{region}' 동·읍·면 조건 해제")
+                    self.assert_element_text(
+                        counter_locator,
+                        "0/5",
+                        f"{region} 조건 해제 확인",
+                    )
+                    self.assert_no_elements(
+                        (By.XPATH, f"{chip_base}[normalize-space(.)={town!r}]"),
+                        f"'{region}' 조건 칩이 해제되지 않았습니다.",
+                    )
+                    self.wait_for_recruit_list_rendered(
+                        job_locations,
+                        f"{region} 조건 해제 후 공고 목록",
+                    )
+                    checked_regions += 1
 
-                previous_locations = tuple(locations)
-
-                # 스크롤 중 DOM이 갱신됐을 수 있으므로 버튼을 다시 조회한다.
-                self.wait.until(
-                    lambda driver: driver.find_elements(*next_page_locator)
-                )
-                self.browser.find_element(*next_page_locator).click()
-
-                # 새 페이지의 공고 목록이 이전 페이지와 달라질 때까지 기다린다.
-                def is_page_changed(driver):
-                    try:
-                        current_locations = self.read_job_locations(job_locations)
-                        return (
-                            bool(current_locations)
-                            and tuple(current_locations) != previous_locations
-                        )
-                    except StaleElementReferenceException:
-                        return False
-
-                self.wait.until(is_page_changed)
-                page += 1
-
-            except Exception as exc:
-                self.fail(
-                    f"{page}페이지 공고 지역 검증 중 오류가 발생했습니다: {exc}"
-                )
+        self.assertTrue(checked_regions, "검증한 지역이 없습니다.")
 
         self.sleep()
 

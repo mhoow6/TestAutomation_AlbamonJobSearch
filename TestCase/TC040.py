@@ -92,15 +92,17 @@ class TC040(TCBase):
         )
         valid_durations = ("하루(1일)", "1개월~3개월")
         page = 1
+        checked_jobs = 0
         one_day_count = 0
         one_to_three_months_count = 0
         total_job_count = 0
 
-        while True:
+        while checked_jobs < self.MAX_JOBS:
             try:
                 self.wait_for_elements(job_items, f"{page}페이지 공고 목록")
                 items = self.browser.find_elements(*job_items)
                 self.assertTrue(items, f"{page}페이지에 공고가 없습니다.")
+                items = items[: self.MAX_JOBS - checked_jobs]
                 self._log_action(f"{page}페이지 복수 근무기간 공고 확인 중...")
                 invalid_jobs = []
                 for index, item in enumerate(items, start=1):
@@ -125,6 +127,10 @@ class TC040(TCBase):
                     f"{page}페이지에 선택한 근무기간이 아닌 공고가 있습니다: "
                     f"{invalid_jobs}",
                 )
+                checked_jobs += len(items)
+                if checked_jobs >= self.MAX_JOBS:
+                    break
+
                 next_page_locator = (
                     By.XPATH,
                     f"//*[@role='navigation']//button["

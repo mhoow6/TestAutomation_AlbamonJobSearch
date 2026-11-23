@@ -183,12 +183,14 @@ class TC038(TCBase):
             "//span[contains(@class, 'list-item-recruit-details__children')]"
         )
         page = 1
+        checked_jobs = 0
 
-        while True:
+        while checked_jobs < self.MAX_JOBS:
             try:
                 self.wait_for_elements(job_items, f"{page}페이지 공고 목록")
                 items = self.browser.find_elements(*job_items)
                 self.assertTrue(items, f"{page}페이지에 공고가 없습니다.")
+                items = items[: self.MAX_JOBS - checked_jobs]
                 self._log_action(f"{page}페이지 교육·강사 전체 및 웹·콘텐츠기획 공고 확인 중...")
 
                 invalid_jobs = []
@@ -212,6 +214,10 @@ class TC038(TCBase):
                     invalid_jobs,
                     f"{page}페이지에 선택 업직종이 없는 공고가 있습니다: {invalid_jobs}",
                 )
+
+                checked_jobs += len(items)
+                if checked_jobs >= self.MAX_JOBS:
+                    break
 
                 next_page_locator = (
                     By.XPATH,

@@ -67,11 +67,25 @@ class PerTestLogStream(LiveLogStream):
 
 
 class StoppableTestResult(unittest.TextTestResult):
-    """각 테스트 케이스가 끝난 뒤 중단 요청을 반영하는 테스트 결과 객체."""
+    """테스트 진행 상태를 전달하면서 중단 요청을 반영하는 결과 객체."""
 
-    def __init__(self, *args, stop_event=None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        stop_event=None,
+        on_test_started=None,
+        on_test_failed=None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.stop_event = stop_event
+        self.on_test_started = on_test_started
+        self.on_test_failed = on_test_failed
+
+    def startTest(self, test):
+        super().startTest(test)
+        if self.on_test_started is not None:
+            self.on_test_started(test)
 
     def _stop_if_requested(self):
         if self.stop_event is not None and self.stop_event.is_set():
@@ -83,10 +97,14 @@ class StoppableTestResult(unittest.TextTestResult):
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
+        if self.on_test_failed is not None:
+            self.on_test_failed(test, "실패")
         self._stop_if_requested()
 
     def addError(self, test, err):
         super().addError(test, err)
+        if self.on_test_failed is not None:
+            self.on_test_failed(test, "오류")
         self._stop_if_requested()
 
     def addSkip(self, test, reason):
@@ -112,6 +130,9 @@ class TestSelector(tk.Tk):
         self.test_vars = {}
         self.search_var = tk.StringVar()
         self.status_var = tk.StringVar(value="실행할 테스트를 선택하세요.")
+        self.current_test_var = tk.StringVar(value="대기 중")
+        self.failed_tests_var = tk.StringVar(value="없음")
+        self.failed_tests = []
         self.stop_event = threading.Event()
         self._build_ui()
         self.search_var.trace_add("write", self._filter_tests)
@@ -164,6 +185,28 @@ class TestSelector(tk.Tk):
         bottom = ttk.Frame(self, padding=(10, 0, 10, 10))
         bottom.pack(fill="both", expand=True)
         ttk.Label(bottom, textvariable=self.status_var).pack(anchor="w", pady=(0, 5))
+
+        progress_frame = ttk.LabelFrame(bottom, text="테스트 진행 상태", padding=6)
+        progress_frame.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            progress_frame,
+            text="현재 테스트:",
+        ).grid(row=0, column=0, sticky="nw")
+        ttk.Label(
+            progress_frame,
+            textvariable=self.current_test_var,
+        ).grid(row=0, column=1, sticky="nw", padx=(6, 0))
+        ttk.Label(
+            progress_frame,
+            text="실패한 테스트:",
+        ).grid(row=1, column=0, sticky="nw", pady=(5, 0))
+        ttk.Label(
+            progress_frame,
+            textvariable=self.failed_tests_var,
+            justify="left",
+        ).grid(row=1, column=1, sticky="nw", padx=(6, 0), pady=(5, 0))
+        progress_frame.columnconfigure(1, weight=1)
+
         button_frame = ttk.Frame(bottom)
         button_frame.pack(fill="x", pady=(0, 8))
         self.run_button = ttk.Button(
@@ -223,6 +266,24 @@ class TestSelector(tk.Tk):
         self.terminal_output.see("end")
         self.terminal_output.configure(state="disabled")
 
+    @staticmethod
+    def _display_test_name(test):
+        """unittest 객체를 UI에 표시할 간결한 테스트 이름으로 변환한다."""
+        return test.id().replace("TestCase.", "")
+
+    def _set_current_test(self, test):
+        self.current_test_var.set(self._display_test_name(test))
+
+    def _add_failed_test(self, test, result_type):
+        test_name = f"{self._display_test_name(test)} ({result_type})"
+        self.failed_tests.append(test_name)
+        self.failed_tests_var.set("\n".join(self.failed_tests))
+
+    def _reset_run_status(self):
+        self.current_test_var.set("준비 중")
+        self.failed_tests.clear()
+        self.failed_tests_var.set("없음")
+
     def run_selected_tests(self):
         selected = [
             name for name, variable in self.test_vars.items() if variable.get()
@@ -239,6 +300,7 @@ class TestSelector(tk.Tk):
         self.terminal_output.configure(state="normal")
         self.terminal_output.delete("1.0", "end")
         self.terminal_output.configure(state="disabled")
+        self._reset_run_status()
         self.status_var.set(f"{len(selected)}개 테스트 실행 중...")
         threading.Thread(
             target=self._run_tests, args=(selected,), daemon=True
@@ -274,7 +336,20 @@ class TestSelector(tk.Tk):
                 stream=terminal_stream,
                 verbosity=2,
                 resultclass=lambda *args, **kwargs: StoppableTestResult(
-                    *args, stop_event=self.stop_event, **kwargs
+                    *args,
+                    stop_event=self.stop_event,
+                    on_test_started=lambda test: self.after(
+                        0,
+                        self._set_current_test,
+                        test,
+                    ),
+                    on_test_failed=lambda test, result_type: self.after(
+                        0,
+                        self._add_failed_test,
+                        test,
+                        result_type,
+                    ),
+                    **kwargs,
                 ),
             ).run(suite)
         elapsed = time.perf_counter() - start_time
@@ -289,16 +364,24 @@ class TestSelector(tk.Tk):
             summary += "결과: 사용자 요청으로 테스트 실행을 중단했습니다.\n"
         terminal_stream.write(summary, persist=False)
         terminal_stream.close()
-        self.after(0, self._finish_run, summary, result.wasSuccessful(), stopped)
+        self.after(
+            0,
+            self._finish_run,
+            summary,
+            result.wasSuccessful(),
+            stopped,
+        )
 
     def _finish_run(self, output, success, stopped):
         self._write_output(output)
         if stopped:
             self.status_var.set("테스트 실행이 중단되었습니다.")
+            self.current_test_var.set("중단됨")
         else:
             self.status_var.set(
                 "테스트 실행 완료" if success else "실패한 테스트가 있습니다."
             )
+            self.current_test_var.set("완료")
         self.run_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
 

@@ -110,14 +110,23 @@ class TC008(TCBase):
         )
         page = 1
         found_locations = set()
+        checked_jobs = 0
 
-        while True:
+        while checked_jobs < self.MAX_JOBS:
             try:
                 self.wait.until(
                     lambda driver: driver.find_elements(*job_locations)
                 )
                 locations = self.read_job_locations(job_locations)
+                locations = locations[: self.MAX_JOBS - checked_jobs]
+                checked_jobs += len(locations)
                 self._log_action(f"{page}페이지 공고 확인 중...")
+
+                for index, location in enumerate(locations, start=1):
+                    self._log_action(
+                        f"{page}페이지 공고 {index} 내용: {location}"
+                    )
+
                 self.assertTrue(locations, f"{page}페이지에 공고가 없습니다.")
 
                 invalid_locations = [
@@ -136,6 +145,9 @@ class TC008(TCBase):
                     for allowed in allowed_locations
                     if any(allowed in location for location in locations)
                 )
+
+                if checked_jobs >= self.MAX_JOBS:
+                    break
 
                 next_page_locator = (
                     By.XPATH,

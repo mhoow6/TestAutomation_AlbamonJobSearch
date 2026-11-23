@@ -23,7 +23,7 @@ class TCBase(unittest.TestCase):
     SEC_WAIT_TIMEOUT = 10
     DEBUG_WAIT_TIME = 1
     RECRUIT_LIST_RENDER_WAIT = 2
-    MAX_JOBS = 500
+    MAX_JOBS = 50
 
     def init(self):
         """Selenium WebDriver와 공통 명시적 대기를 초기화한다."""

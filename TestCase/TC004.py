@@ -105,15 +105,23 @@ class TC004(TCBase):
         )
         page = 1
         found_locations = set()
+        checked_jobs = 0
 
-        while True:
+        while checked_jobs < self.MAX_JOBS:
             try:
                 # 현재 페이지의 공고 목록을 읽는다.
                 self.wait.until(
                     lambda driver: driver.find_elements(*job_locations)
                 )
                 locations = self.read_job_locations(job_locations)
+                locations = locations[: self.MAX_JOBS - checked_jobs]
+                checked_jobs += len(locations)
                 self._log_action(f"{page}페이지 공고 확인 중...")
+
+                for index, location in enumerate(locations, start=1):
+                    self._log_action(
+                        f"{page}페이지 공고 {index} 내용: {location}"
+                    )
 
                 self.assertTrue(
                     locations,
@@ -137,6 +145,10 @@ class TC004(TCBase):
                     for allowed in allowed_locations
                     if any(allowed in location for location in locations)
                 )
+
+                # 최대 공고 수까지 확인했으면 현재 페이지의 검증 및 기록 후 종료한다.
+                if checked_jobs >= self.MAX_JOBS:
+                    break
 
                 # 다음 페이지 버튼을 찾는다.
                 next_page_locator = (
