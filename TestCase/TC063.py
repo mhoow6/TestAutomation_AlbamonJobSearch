@@ -121,9 +121,13 @@ class TC063(TCBase):
         self.click_element((By.ID, "select-size"), "공고 목록 노출 개수 선택")
         self.click_element((By.XPATH, "//button[normalize-space()='50개씩']"), "공고 50개씩 보기")
         self.wait.until(lambda driver: driver.find_element(By.ID, "select-size").text.strip() == "50개씩")
+        self.sleep()
+
         job_items = (By.XPATH, "//ul[contains(@class, 'SimpleRecruitList')]//li")
         time_details = ".//div[contains(@class, 'list-item-recruit__contents--time')]//p"
         self.wait_for_recruit_list_rendered(job_items, "50개 보기 적용 후 공고 목록")
+        self.sleep()
+
         page = 1
         checked_jobs = 0
         invalid_jobs = []
