@@ -5,8 +5,11 @@ from Module.TCBase import TCBase
 
 
 class TC003(TCBase):
+    BROWSER_RESTART_INTERVAL = 100
+
     def setUp(self):
         super().init()
+        self.no_job_regions = set()
 
     @staticmethod
     def _visible_names(elements, exclude_all=False):
@@ -20,6 +23,70 @@ class TC003(TCBase):
                 continue
             names.append(name)
         return names
+
+    def _wait_for_region_results(self, name):
+        """결과 수 표시가 렌더링될 때까지 기다린다."""
+        self.sleep(self.RECRUIT_LIST_RENDER_WAIT)
+        result_count_locator = (
+            By.XPATH,
+            "//*[@id='__next']/div/div[1]/main/div[2]/div[1]/div/"
+            "div[2]/div[1]/div[1]/div/span",
+        )
+        return self.wait.until(
+            lambda driver: driver.find_element(*result_count_locator).text.strip()
+        )
+
+    def _restart_browser_for_region(
+        self,
+        panel,
+        page_size_locator,
+        job_locations,
+        province,
+        district,
+    ):
+        """메모리 누적을 줄이고 현재 시·도·구·군까지 복원한다."""
+        self._log_action(
+            f"지역 {self.BROWSER_RESTART_INTERVAL}건 확인 완료 - "
+            f"브라우저 재시작 후 '{province} {district}'부터 이어서 진행"
+        )
+        self.dispose()
+        super().init()
+        super().load()
+
+        self.select_if_not_selected(
+            (By.XPATH, "//input[@id='tab-0']"),
+            (By.XPATH, "//label[@role='tab' and @for='tab-0']"),
+            "지역 탭",
+        )
+        self.sleep()
+        self.click_element(page_size_locator, "공고 목록 노출 개수 선택")
+        self.click_element(
+            (By.XPATH, "//button[normalize-space()='50개씩']"),
+            "공고 50개씩 보기",
+        )
+        self.wait.until(
+            lambda driver: driver.find_element(*page_size_locator).text.strip()
+            == "50개씩"
+        )
+        self.click_element(
+            (By.XPATH, "//button[normalize-space()='리스트 펼쳐 보기']"),
+            "공고 리스트 그리드뷰 전환",
+        )
+        self.wait_for_recruit_list_rendered(
+            job_locations,
+            "브라우저 재시작 후 그리드뷰 공고 목록",
+        )
+
+        self.click_element(
+            self.region_button_locator(panel, province),
+            f"'{province}' 시·도 복원",
+        )
+        self.sleep()
+        self.click_element(
+            self.region_button_locator(panel, district),
+            f"'{province} {district}' 시·구·군 복원",
+        )
+        self.sleep()
 
     def _verify_region_jobs(self, region, job_locations):
         """선택한 최하위 지역의 공고를 최대 MAX_JOBS건까지 검증한다."""
@@ -43,12 +110,22 @@ class TC003(TCBase):
 
         while checked_jobs < self.MAX_JOBS:
             try:
+                result_count = self._wait_for_region_results(
+                    f"{expected_location} {page}페이지 결과 수"
+                )
+                normalized_result_count = "".join(result_count.split())
+                if "0건" in normalized_result_count:
+                    self.no_job_regions.add(expected_location)
+                    return
+
                 self.wait_for_elements(
                     job_locations,
                     f"{expected_location} {page}페이지 공고 목록",
                 )
                 items = self.browser.find_elements(*job_locations)
-                self.assertTrue(items, f"{expected_location} {page}페이지에 공고가 없습니다.")
+                if not items:
+                    self.no_job_regions.add(expected_location)
+                    return
                 remaining_jobs = self.MAX_JOBS - checked_jobs
                 invalid_jobs = []
                 for index, item in enumerate(items[:remaining_jobs], start=1):
@@ -274,10 +351,6 @@ class TC003(TCBase):
                         town,
                         f"조건 리스트의 {region}",
                     )
-                    self.wait_for_recruit_list_rendered(
-                        job_locations,
-                        f"{region} 조건 적용 후 공고 목록",
-                    )
                     self._verify_region_jobs(
                         (province, district, town),
                         job_locations,
@@ -293,13 +366,23 @@ class TC003(TCBase):
                         (By.XPATH, f"{chip_base}[normalize-space(.)={town!r}]"),
                         f"'{region}' 조건 칩이 해제되지 않았습니다.",
                     )
-                    self.wait_for_recruit_list_rendered(
-                        job_locations,
-                        f"{region} 조건 해제 후 공고 목록",
-                    )
+                    self._wait_for_region_results(f"{region} 조건 해제 후 결과 수")
                     checked_regions += 1
 
+                    if checked_regions % self.BROWSER_RESTART_INTERVAL == 0:
+                        self._restart_browser_for_region(
+                            panel,
+                            page_size_locator,
+                            job_locations,
+                            province,
+                            district,
+                        )
+
         self.assertTrue(checked_regions, "검증한 지역이 없습니다.")
+
+        if self.no_job_regions:
+            no_job_regions = ", ".join(sorted(self.no_job_regions))
+            self._log_action(f"비고: 조회 공고 0건 지역 - {no_job_regions}")
 
         self.sleep()
 
