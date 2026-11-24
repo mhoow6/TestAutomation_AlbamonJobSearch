@@ -35,6 +35,13 @@ class TC044(TCBase):
         if displayed_match:
             return displayed_match.group(1)
 
+        listed_weekdays = re.match(
+            r"^([월화수목금토일](?:\s*,\s*[월화수목금토일])+)",
+            normalized,
+        )
+        if listed_weekdays:
+            return listed_weekdays.group(1)
+
         displayed = re.split(
             r"\s+(?:협의|평일|근무)|\s+\d+\s*일",
             normalized,
@@ -129,10 +136,18 @@ class TC044(TCBase):
                         By.CSS_SELECTOR,
                         "a.list-item-recruit__link",
                     )
-                    raw_detail_work_day = self._get_detail_work_day(detail_link, title)
+                    raw_detail_work_day = self._get_detail_work_day(
+                        detail_link,
+                        title,
+                        skip_adult_certification=True,
+                    )
+                    if raw_detail_work_day is None:
+                        checked_jobs += 1
+                        continue
+
                     detail_work_day = (
                         self._extract_displayed_work_day(raw_detail_work_day)
-                        if raw_detail_work_day is not None
+                        if raw_detail_work_day
                         else None
                     )
                     is_allowed = (

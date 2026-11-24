@@ -59,6 +59,13 @@ class TC069(TCBase):
                     f"{alert_message} (공고: {title})"
                 )
 
+            if "/user-account/cert/adult/non-login" in self.browser.current_url:
+                self._log_action(
+                    f"성인인증 필요 공고 검증 제외: {title} | "
+                    f"URL: {self.browser.current_url}"
+                )
+                return None
+
             employment_locator = (
                 By.XPATH,
                 "//dt[normalize-space()='고용형태']/following-sibling::dd[1]",
@@ -144,6 +151,10 @@ class TC069(TCBase):
                     employment_detail = self._get_detail_employment_type(
                         detail_link, title, job_items
                     )
+                    if employment_detail is None:
+                        checked_jobs += 1
+                        continue
+
                     normalized_detail = "".join(employment_detail.split())
                     accepted_types = self.EMPLOYMENT_DETAIL_ALIASES.get(
                         employment_type,

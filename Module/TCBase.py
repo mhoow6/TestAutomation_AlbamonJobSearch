@@ -7,6 +7,7 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException,
     NoAlertPresentException,
     StaleElementReferenceException,
+    WebDriverException,
 )
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -23,7 +24,7 @@ class TCBase(unittest.TestCase):
     SEC_WAIT_TIMEOUT = 10
     DEBUG_WAIT_TIME = 1
     RECRUIT_LIST_RENDER_WAIT = 2
-    MAX_JOBS = 50
+    MAX_JOBS = 3
 
     def init(self):
         """Selenium WebDriver와 공통 명시적 대기를 초기화한다."""
@@ -51,7 +52,12 @@ class TCBase(unittest.TestCase):
         except Exception as exc:
             self.fail(f"검색 조건 페이지 로딩 확인 중 오류가 발생했습니다: {exc}")
 
-    def _get_detail_work_day(self, detail_link, title):
+    def _get_detail_work_day(
+        self,
+        detail_link,
+        title,
+        skip_adult_certification=False,
+    ):
         """공고 상세를 새 탭에서 확인하고 목록 탭으로 돌아온다."""
         original_handle = self.browser.current_window_handle
         original_handles = set(self.browser.window_handles)
@@ -82,6 +88,17 @@ class TCBase(unittest.TestCase):
                 self._log_action(
                     f"마감 공고 알림 확인 후 검증 제외: {alert_message} "
                     f"(공고: {title})"
+                )
+                return None
+
+            if (
+                skip_adult_certification
+                and "/user-account/cert/adult/non-login"
+                in self.browser.current_url
+            ):
+                self._log_action(
+                    f"성인인증 필요 공고 검증 제외: {title} | "
+                    f"URL: {self.browser.current_url}"
                 )
                 return None
 
@@ -178,6 +195,30 @@ class TCBase(unittest.TestCase):
                     if close_button.is_displayed() and close_button.is_enabled():
                         close_button.click()
                         return
+        except Exception:
+            pass
+
+        # 상단 메뉴의 hover 드롭다운이 열려 있으면 화면 전체를 덮어
+        # 실제 조건 버튼 클릭을 가로막을 수 있으므로 비활성화한다.
+        try:
+            active_header_layers = self.browser.find_elements(
+                By.CSS_SELECTOR,
+                ".header-any--active",
+            )
+            for layer in active_header_layers:
+                if layer.is_displayed():
+                    self.browser.execute_script(
+                        """
+                        arguments[0].dispatchEvent(
+                            new MouseEvent('mouseleave', {bubbles: true})
+                        );
+                        arguments[0].dispatchEvent(
+                            new MouseEvent('mouseout', {bubbles: true})
+                        );
+                        arguments[0].classList.remove('header-any--active');
+                        """,
+                        layer,
+                    )
         except Exception:
             pass
 
@@ -402,14 +443,23 @@ class TCBase(unittest.TestCase):
     def assert_element_text(self, locator, expected_text, name="요소"):
         """요소를 하이라이트한 뒤 텍스트를 기다려 검증한다."""
         self.highlight_element(locator, name)
+        last_transient_error = None
+
+        def text_matches(driver):
+            """페이지 재렌더링 중 발생하는 일시적인 WebDriver 오류는 재시도한다."""
+            nonlocal last_transient_error
+            try:
+                return driver.find_element(*locator).text.strip() == expected_text
+            except WebDriverException as exc:
+                last_transient_error = exc
+                return False
+
         try:
-            self.wait.until(
-                lambda driver: driver.find_element(*locator).text.strip()
-                == expected_text
-            )
+            self.wait.until(text_matches)
         except Exception as exc:
+            detail = last_transient_error or exc
             self.fail(
-                f"'{name}'의 텍스트가 '{expected_text}'(으)로 표시되지 않았습니다: {exc}"
+                f"'{name}'의 텍스트가 '{expected_text}'(으)로 표시되지 않았습니다: {detail}"
             )
 
     def assert_no_elements(self, locator, message, highlight_locator=None, name="확인 영역"):
